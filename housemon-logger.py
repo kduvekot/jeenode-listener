@@ -111,12 +111,12 @@ class SerialListener:
             try:
                 log.info("opening serial %s @ %d", self.device, self.baud)
                 ser = serial.Serial(self.device, self.baud, timeout=SERIAL_READ_TIMEOUT)
-                # Give the JeeLink a moment; opening often triggers a DTR reset
-                # which in turn makes RF12demo print its banner.
-                time.sleep(POST_OPEN_SETTLE)
+                self._force_reset(ser)
                 if not self._configure(ser):
                     log.warning(
-                        "RF12demo banner not confirmed within %.1fs, continuing anyway",
+                        "RF12demo banner not confirmed within %.1fs "
+                        "(adapter may not wire DTR to reset); packets should "
+                        "still flow",
                         BANNER_TIMEOUT,
                     )
                 self._read_loop(ser)
@@ -135,6 +135,25 @@ class SerialListener:
                 break
 
     # -- helpers ------------------------------------------------------------
+
+    def _force_reset(self, ser: serial.Serial) -> None:
+        """
+        Pulse DTR to force the JeeLink to reset so RF12demo re-emits its
+        boot banner. Many USB-serial bridges (PL2303, CH340, some FTDIs)
+        don't toggle DTR on port open, so we have to do it ourselves.
+
+        Harmless if the adapter doesn't honour DTR control at all, or if the
+        JeeLink isn't wired for reset-on-DTR -- _configure() just won't see
+        the banner and logs its warning.
+        """
+        try:
+            ser.dtr = False
+            time.sleep(0.1)
+            ser.dtr = True
+        except (OSError, IOError) as e:
+            log.debug("DTR toggle not supported (%s); skipping reset pulse", e)
+        # Let RF12demo boot and start writing its banner to the serial port.
+        time.sleep(POST_OPEN_SETTLE)
 
     def _configure(self, ser: serial.Serial) -> bool:
         """
