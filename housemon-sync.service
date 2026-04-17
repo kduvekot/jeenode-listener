@@ -8,6 +8,8 @@ After=network-online.target
 # run is still going. systemd handles this implicitly for Type=oneshot, but
 # being explicit is nice.
 ConditionPathIsDirectory=/var/lib/housemon/logger
+# Skip the whole thing if the user hasn't set up rclone yet.
+ConditionFileNotEmpty=/etc/housemon/rclone.conf
 
 [Service]
 Type=oneshot
@@ -16,9 +18,12 @@ User=housemon
 Group=housemon
 WorkingDirectory=/var/lib/housemon
 
-# REMOTE (e.g. `minio:housemon/logger`) and any rclone env overrides live here.
-# See README for rclone remote configuration.
-EnvironmentFile=/etc/housemon/sync.env
+# REMOTE (e.g. `minio:housemon/logger`) lives in the shared config file,
+# managed by install.sh and hand-editable.
+EnvironmentFile=/etc/housemon/housemon.conf
+
+# Extra belt: quietly skip this timer tick if REMOTE is unset (sync disabled).
+ExecCondition=/bin/sh -c 'test -n "$${REMOTE}"'
 
 # `copy` (not `sync`) so the remote is an append-only mirror -- we never delete
 # remote objects just because the local copy rotated or was pruned.

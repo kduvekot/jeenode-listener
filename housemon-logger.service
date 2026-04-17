@@ -15,12 +15,21 @@ SupplementaryGroups=dialout
 
 WorkingDirectory=/var/lib/housemon
 
+# Site-specific values (RF12 radio params, serial device/baud, rclone remote)
+# live here. install.sh writes it; users can hand-edit and `systemctl restart`.
+EnvironmentFile=/etc/housemon/housemon.conf
+
 # Uses the distro's /usr/bin/python3 and the `python3-serial` apt package (no
 # network at runtime, no PEP 723 resolution). The inline script metadata at
 # the top of the .py file is still valid, so `uv run --script ...` works for
 # interactive dev without changing anything here.
 ExecStart=/usr/bin/python3 /opt/housemon/housemon-logger.py \
-    --logdir /var/lib/housemon/logger
+    --logdir /var/lib/housemon/logger \
+    --device=${SERIAL_DEVICE} \
+    --baud=${SERIAL_BAUD} \
+    --node-id=${RF12_NODE_ID} \
+    --group=${RF12_GROUP} \
+    --band=${RF12_BAND}
 
 Restart=on-failure
 RestartSec=5s
