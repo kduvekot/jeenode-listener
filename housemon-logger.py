@@ -41,12 +41,13 @@ import serial
 # Configuration constants
 # ---------------------------------------------------------------------------
 
-# RF12demo radio parameter defaults. Override per-invocation with
-# --node-id / --group / --band (populated from /etc/housemon/housemon.conf
-# when running under systemd).
-DEFAULT_RF12_NODE_ID = 31
-DEFAULT_RF12_GROUP = 125
-DEFAULT_RF12_BAND = 8  # 1=433, 2=868, 3=915 -- 8 is legacy 868 on many setups
+# RF12demo radio parameter defaults. These match the stock JeeLabs
+# `jeelib/RF12demo` sketch defaults (node 1, group 0xD4=212, band 2=868MHz).
+# Override per-invocation with --node-id / --group / --band (populated from
+# /etc/housemon/housemon.conf when running under systemd).
+DEFAULT_RF12_NODE_ID = 1
+DEFAULT_RF12_GROUP = 212
+DEFAULT_RF12_BAND = 2  # 1=433MHz, 2=868MHz, 3=915MHz
 
 # Timing knobs.
 RECONNECT_DELAY = 5.0       # seconds between serial reconnect attempts

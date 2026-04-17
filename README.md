@@ -40,7 +40,7 @@ each default.
 ```bash
 curl -LsSf https://raw.githubusercontent.com/kduvekot/jeenode-listener/main/install.sh \
     | sudo bash -s -- \
-        --node-id 42 --group 12 --band 8 \
+        --node-id 31 --group 125 --band 2 \
         --remote minio:housemon/logger
 ```
 
@@ -120,10 +120,14 @@ python3 housemon-logger.py \
     [--device /dev/ttyUSB0] \
     [--baud 57600] \
     [--logdir ~/housemon/logger] \
-    [--node-id 31] \
-    [--group 125] \
-    [--band 8]
+    [--node-id 1] \
+    [--group 212] \
+    [--band 2]
 ```
+
+Defaults match the stock JeeLabs `jeelib/RF12demo` sketch — real networks
+nearly always diverge. The `b` command only accepts `1` (433 MHz), `2`
+(868 MHz), or `3` (915 MHz); other values are ignored by the firmware.
 
 Under systemd these are populated from `/etc/housemon/housemon.conf` so you
 rarely call the script by hand — but the flags exist for testing and
