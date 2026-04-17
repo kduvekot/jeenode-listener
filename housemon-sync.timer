@@ -1,0 +1,15 @@
+[Unit]
+Description=Periodically sync HouseMon logs to S3-compatible storage
+Documentation=https://github.com/kduvekot/jeenode-listener
+
+[Timer]
+# First run 30s after boot, then every minute while the box is up.
+OnBootSec=30s
+OnUnitActiveSec=1min
+# Don't bunch up if the box was off: run once on start if we missed a slot.
+Persistent=true
+AccuracySec=10s
+Unit=housemon-sync.service
+
+[Install]
+WantedBy=timers.target

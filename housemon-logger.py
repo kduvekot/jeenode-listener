@@ -3,11 +3,10 @@
 # requires-python = ">=3.9"
 # dependencies = [
 #     "pyserial>=3.5",
-#     "boto3>=1.26",
 # ]
 # ///
 """
-housemon-logger: RF12demo serial listener with daily log rotation and S3 backup.
+housemon-logger: RF12demo serial listener with daily log rotation.
 
 Reads raw lines from an RF12demo-running JeeLink (or similar) over a serial
 port, filters for `OK` and `?` frames, timestamps them, and appends them to a
@@ -17,13 +16,13 @@ daily log file. Each log line has the form:
 
 Log files live under `<logdir>/YYYY/YYYYMMDD.txt` (UTC) and rotate
 automatically at midnight because the target path is recomputed on every
-packet.
+packet. Writes are append-mode and opened-closed per packet, so no data sits
+in a buffer on crash.
 
-If an S3 bucket is configured, the current file is uploaded every 60 seconds
-and on every rollover and clean shutdown. Works with AWS S3 and any
-S3-compatible backend (MinIO, Ceph RGW, Cloudflare R2, Backblaze B2, Wasabi,
-...) via --s3-endpoint / --s3-region / --s3-addressing-style. Without a
-bucket the S3 side is a no-op.
+This script intentionally does **only** the logging. Shipping files off to
+S3 / MinIO / etc. is handled by a separate systemd timer that runs `rclone
+sync` against `<logdir>`. Keeping the logger network-free makes it smaller,
+more reliable, and easier to isolate from network problems.
 """
 
 import argparse
@@ -35,7 +34,6 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import serial
 
@@ -49,20 +47,15 @@ RF12_GROUP = 125
 RF12_BAND = 8  # 1=433, 2=868, 3=915 -- 8 is what this install uses
 
 # Timing knobs.
-S3_UPLOAD_INTERVAL = 60.0   # seconds between periodic uploads of current file
 RECONNECT_DELAY = 5.0       # seconds between serial reconnect attempts
 BANNER_TIMEOUT = 3.0        # seconds to wait for the RF12demo banner
 SERIAL_READ_TIMEOUT = 1.0   # seconds per readline() so we can check signals
+POST_OPEN_SETTLE = 0.5      # give the JeeLink time to (re)boot after DTR reset
 
 # Defaults for CLI overrides.
 DEFAULT_DEVICE = "/dev/ttyUSB0"
 DEFAULT_BAUD = 57600
 DEFAULT_LOGDIR = "~/housemon/logger"
-DEFAULT_BUCKET = ""              # empty string disables S3
-DEFAULT_S3_PREFIX = "logger"
-DEFAULT_S3_ENDPOINT = ""         # empty = AWS default; set for MinIO/R2/B2/etc.
-DEFAULT_S3_REGION = ""           # empty = boto3 default credential / env chain
-DEFAULT_S3_ADDRESSING = ""       # "", "auto", "path", or "virtual"
 
 log = logging.getLogger("housemon-logger")
 
@@ -84,7 +77,7 @@ def daily_path(logdir: Path, now: datetime) -> Path:
     return logdir / now.strftime("%Y") / (now.strftime("%Y%m%d") + ".txt")
 
 
-def append_line(logdir: Path, now: datetime, line: str) -> Path:
+def append_line(logdir: Path, now: datetime, line: str) -> None:
     """Append one log line. Opens and closes the file each call (no buffering)."""
     path = daily_path(logdir, now)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,139 +85,6 @@ def append_line(logdir: Path, now: datetime, line: str) -> Path:
         f.write(line)
         if not line.endswith("\n"):
             f.write("\n")
-    return path
-
-
-# ---------------------------------------------------------------------------
-# S3 uploader
-# ---------------------------------------------------------------------------
-
-class S3Uploader:
-    """
-    Periodic and event-driven uploader for the daily log file.
-
-    Behaviour:
-      * Periodic timer thread uploads the current in-progress file every
-        `S3_UPLOAD_INTERVAL` seconds.
-      * `note_write()` is called from the serial thread after every packet
-        write; when it detects that the path has changed (midnight rollover)
-        it synchronously uploads the previous day's completed file.
-      * `final_sync()` stops the thread and does one last upload.
-
-    If no bucket was configured this class is a no-op.
-    """
-
-    def __init__(
-        self,
-        bucket: str,
-        prefix: str,
-        logdir: Path,
-        endpoint_url: str = "",
-        region: str = "",
-        addressing_style: str = "",
-    ):
-        self.bucket = bucket
-        self.prefix = prefix.strip("/")
-        self.logdir = logdir
-        self.endpoint_url = endpoint_url
-        self.region = region
-        self.addressing_style = addressing_style
-        self.enabled = bool(bucket)
-        self.client = None
-        self._stop = threading.Event()
-        self._thread = None
-        self._current_path: Optional[Path] = None
-        self._lock = threading.Lock()
-
-        if self.enabled:
-            # Import boto3 lazily so the script can run without AWS deps
-            # resolved in S3-disabled mode (though with uv they always are).
-            import boto3
-            from botocore.config import Config
-
-            s3_opts = {}
-            if addressing_style:
-                s3_opts["addressing_style"] = addressing_style
-            config = Config(
-                s3=s3_opts or None,
-                retries={"mode": "standard", "max_attempts": 3},
-            )
-
-            client_kwargs = {"config": config}
-            if endpoint_url:
-                client_kwargs["endpoint_url"] = endpoint_url
-            if region:
-                client_kwargs["region_name"] = region
-
-            self.client = boto3.client("s3", **client_kwargs)
-
-    # -- lifecycle ----------------------------------------------------------
-
-    def start(self) -> None:
-        if not self.enabled:
-            log.info("S3 uploads disabled (no --bucket configured)")
-            return
-        self._thread = threading.Thread(
-            target=self._run_periodic,
-            name="s3-uploader",
-            daemon=True,
-        )
-        self._thread.start()
-        log.info(
-            "S3 uploader started (bucket=%s prefix=%s endpoint=%s region=%s style=%s)",
-            self.bucket,
-            self.prefix,
-            self.endpoint_url or "<aws-default>",
-            self.region or "<default>",
-            self.addressing_style or "<auto>",
-        )
-
-    def final_sync(self) -> None:
-        if not self.enabled:
-            return
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-        with self._lock:
-            path = self._current_path
-        if path is not None and path.exists():
-            self._upload(path)
-
-    # -- event hooks --------------------------------------------------------
-
-    def note_write(self, path: Path) -> None:
-        """Called after each successful log append. Detects rollover."""
-        if not self.enabled:
-            return
-        with self._lock:
-            previous = self._current_path
-            self._current_path = path
-        if previous is not None and previous != path:
-            # Midnight rollover: push the just-completed file right away.
-            log.info("rollover detected, uploading completed %s", previous.name)
-            self._upload(previous)
-
-    # -- internals ----------------------------------------------------------
-
-    def _run_periodic(self) -> None:
-        # Event.wait returns True if the event was set, False on timeout.
-        while not self._stop.wait(S3_UPLOAD_INTERVAL):
-            with self._lock:
-                path = self._current_path
-            if path is not None and path.exists():
-                self._upload(path)
-
-    def _key_for(self, path: Path) -> str:
-        rel = path.relative_to(self.logdir).as_posix()
-        return f"{self.prefix}/{rel}" if self.prefix else rel
-
-    def _upload(self, path: Path) -> None:
-        key = self._key_for(path)
-        try:
-            self.client.upload_file(str(path), self.bucket, key)
-            log.debug("uploaded %s -> s3://%s/%s", path, self.bucket, key)
-        except Exception as e:  # pragma: no cover - we never want this to crash the logger
-            log.warning("S3 upload failed for %s: %s", path, e)
 
 
 # ---------------------------------------------------------------------------
@@ -234,11 +94,10 @@ class S3Uploader:
 class SerialListener:
     """Owns the serial port, handles (re)connection, configuration and logging."""
 
-    def __init__(self, device: str, baud: int, logdir: Path, uploader: S3Uploader):
+    def __init__(self, device: str, baud: int, logdir: Path):
         self.device = device
         self.baud = baud
         self.logdir = logdir
-        self.uploader = uploader
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -252,8 +111,9 @@ class SerialListener:
             try:
                 log.info("opening serial %s @ %d", self.device, self.baud)
                 ser = serial.Serial(self.device, self.baud, timeout=SERIAL_READ_TIMEOUT)
-                # Give the JeeLink a moment; opening often triggers a reset.
-                time.sleep(0.5)
+                # Give the JeeLink a moment; opening often triggers a DTR reset
+                # which in turn makes RF12demo print its banner.
+                time.sleep(POST_OPEN_SETTLE)
                 if not self._configure(ser):
                     log.warning(
                         "RF12demo banner not confirmed within %.1fs, continuing anyway",
@@ -278,25 +138,15 @@ class SerialListener:
 
     def _configure(self, ser: serial.Serial) -> bool:
         """
-        Push RF12demo config commands and wait for the `[RF12demo...]` banner.
+        Read the `[RF12demo...]` banner (emitted by the device after the DTR
+        reset that opening the port triggers), then push our RF12 config.
         Returns True if the banner was seen within BANNER_TIMEOUT, else False.
+
+        NB: we read the banner BEFORE sending commands. The banner is a
+        boot-time string, not a response to anything we send -- so draining
+        the input buffer first would throw it away.
         """
-        # Drain anything already buffered from the device.
-        try:
-            ser.reset_input_buffer()
-        except Exception:
-            pass
-
-        for cmd in (
-            f"{RF12_NODE_ID}i",
-            f"{RF12_BAND}b",
-            f"{RF12_GROUP}g",
-        ):
-            ser.write(cmd.encode() + b"\r\n")
-            ser.flush()
-            # RF12demo parses single-character commands; a short pause is plenty.
-            time.sleep(0.05)
-
+        saw_banner = False
         deadline = time.monotonic() + BANNER_TIMEOUT
         while time.monotonic() < deadline:
             raw = ser.readline()
@@ -307,8 +157,19 @@ class SerialListener:
                 continue
             if text.startswith("[RF12demo"):
                 log.info("RF12demo ready: %s", text)
-                return True
-        return False
+                saw_banner = True
+                break
+
+        for cmd in (
+            f"{RF12_BAND}b",
+            f"{RF12_GROUP}g",
+            f"{RF12_NODE_ID}i",
+        ):
+            ser.write(cmd.encode() + b"\r\n")
+            ser.flush()
+            time.sleep(0.05)
+
+        return saw_banner
 
     def _read_loop(self, ser: serial.Serial) -> None:
         """Read packets until the port closes or we are told to stop."""
@@ -323,9 +184,7 @@ class SerialListener:
             if not (text.startswith("OK") or text.startswith("?")):
                 continue
             now = utc_now()
-            line = f"L {iso_stamp(now)} {self.device} {text}"
-            path = append_line(self.logdir, now, line)
-            self.uploader.note_write(path)
+            append_line(self.logdir, now, f"L {iso_stamp(now)} {self.device} {text}")
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +193,7 @@ class SerialListener:
 
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="RF12demo serial logger with daily rotation and optional S3 backup",
+        description="RF12demo serial logger with daily log rotation",
     )
     p.add_argument("--device", default=DEFAULT_DEVICE,
                    help=f"serial device path (default: {DEFAULT_DEVICE})")
@@ -342,20 +201,6 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help=f"baud rate (default: {DEFAULT_BAUD})")
     p.add_argument("--logdir", default=DEFAULT_LOGDIR,
                    help=f"local log directory (default: {DEFAULT_LOGDIR})")
-    p.add_argument("--bucket", default=DEFAULT_BUCKET,
-                   help="S3 bucket for backups; empty disables S3")
-    p.add_argument("--s3-prefix", default=DEFAULT_S3_PREFIX,
-                   help=f"S3 key prefix (default: {DEFAULT_S3_PREFIX})")
-    p.add_argument("--s3-endpoint", default=DEFAULT_S3_ENDPOINT,
-                   help="S3 endpoint URL for non-AWS backends "
-                        "(e.g. https://minio.lan, https://<acct>.r2.cloudflarestorage.com). "
-                        "Empty uses the AWS default.")
-    p.add_argument("--s3-region", default=DEFAULT_S3_REGION,
-                   help="S3 region name. Empty uses the boto3 default chain.")
-    p.add_argument("--s3-addressing-style", default=DEFAULT_S3_ADDRESSING,
-                   choices=["", "auto", "path", "virtual"],
-                   help="S3 addressing style. 'path' for most self-hosted "
-                        "MinIO/Ceph setups; 'virtual' for R2/B2; empty=auto.")
     return p.parse_args(argv)
 
 
@@ -371,17 +216,7 @@ def main(argv=None) -> int:
     logdir.mkdir(parents=True, exist_ok=True)
     log.info("logdir=%s device=%s baud=%d", logdir, args.device, args.baud)
 
-    uploader = S3Uploader(
-        bucket=args.bucket,
-        prefix=args.s3_prefix,
-        logdir=logdir,
-        endpoint_url=args.s3_endpoint,
-        region=args.s3_region,
-        addressing_style=args.s3_addressing_style,
-    )
-    uploader.start()
-
-    listener = SerialListener(args.device, args.baud, logdir, uploader)
+    listener = SerialListener(args.device, args.baud, logdir)
 
     def handle_signal(signum, _frame):
         log.info("received signal %d, shutting down", signum)
@@ -390,12 +225,8 @@ def main(argv=None) -> int:
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    try:
-        listener.run()
-    finally:
-        log.info("final S3 sync")
-        uploader.final_sync()
-        log.info("exit")
+    listener.run()
+    log.info("exit")
     return 0
 
 

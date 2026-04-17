@@ -3,8 +3,7 @@ Description=HouseMon RF12demo serial logger
 Documentation=https://github.com/kduvekot/jeenode-listener
 # Only run while the JeeLink is actually plugged in.
 BindsTo=dev-ttyUSB0.device
-After=dev-ttyUSB0.device network-online.target
-Wants=network-online.target
+After=dev-ttyUSB0.device
 
 [Service]
 Type=simple
@@ -14,30 +13,20 @@ User=housemon
 Group=housemon
 SupplementaryGroups=dialout
 
-# Home of the `housemon` user; holds the uv cache and the log tree.
 WorkingDirectory=/var/lib/housemon
 
-# BUCKET (and optionally AWS_* vars) live here, out of the unit file.
-EnvironmentFile=/etc/housemon/logger.env
-
-# uv reads the inline script metadata (PEP 723) and resolves deps on first run.
-# `--flag=${VAR}` form (not `--flag ${VAR}`) so an unset env var expands to an
-# empty value instead of swallowing the next argument.
+# uv reads the inline script metadata (PEP 723) and resolves pyserial once
+# into /var/lib/housemon/.cache/uv on first run.
 ExecStart=/usr/local/bin/uv run --script /opt/housemon/housemon-logger.py \
-    --logdir /var/lib/housemon/logger \
-    --bucket=${BUCKET} \
-    --s3-endpoint=${S3_ENDPOINT} \
-    --s3-region=${S3_REGION} \
-    --s3-addressing-style=${S3_ADDRESSING_STYLE}
+    --logdir /var/lib/housemon/logger
 
 Restart=on-failure
 RestartSec=5s
 
 # --- Hardening ---------------------------------------------------------------
-# The service has one job: read a USB serial device and write files under
-# /var/lib/housemon. Everything else is locked down.
-# All directives below are available on systemd >= 247 (Raspberry Pi OS
-# Trixie ships systemd 257 and a 6.12 LTS kernel, so everything is supported).
+# The logger has exactly one job: read /dev/ttyUSB0 and append to files under
+# /var/lib/housemon/logger. It needs no network whatsoever -- S3/MinIO sync is
+# handled by a separate timer-driven unit (housemon-sync.service).
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -54,13 +43,12 @@ RestrictNamespaces=true
 RestrictRealtime=true
 LockPersonality=true
 SystemCallArchitectures=native
-# Only AF_UNIX (dns resolver / syslog) and IPv4/6 (HTTPS to S3) are needed.
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# No network sockets at all -- only AF_UNIX for journald logging.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
 CapabilityBoundingSet=
 AmbientCapabilities=
-# Only this path is writable.
 ReadWritePaths=/var/lib/housemon
 
 [Install]
-# Start whenever the USB device appears, not just at boot.
 WantedBy=dev-ttyUSB0.device
