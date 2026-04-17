@@ -1,0 +1,56 @@
+[Unit]
+Description=HouseMon log sync to S3-compatible storage
+Documentation=https://github.com/kduvekot/jeenode-listener
+Wants=network-online.target
+After=network-online.target
+
+# Do not run at the same time as ourselves if the timer fires while a previous
+# run is still going. systemd handles this implicitly for Type=oneshot, but
+# being explicit is nice.
+ConditionPathIsDirectory=/var/lib/housemon/logger
+
+[Service]
+Type=oneshot
+
+User=housemon
+Group=housemon
+WorkingDirectory=/var/lib/housemon
+
+# REMOTE (e.g. `minio:housemon/logger`) and any rclone env overrides live here.
+# See README for rclone remote configuration.
+EnvironmentFile=/etc/housemon/sync.env
+
+# `copy` (not `sync`) so the remote is an append-only mirror -- we never delete
+# remote objects just because the local copy rotated or was pruned.
+ExecStart=/usr/bin/rclone copy \
+    --config /etc/housemon/rclone.conf \
+    --log-level INFO \
+    --stats 0 \
+    /var/lib/housemon/logger \
+    ${REMOTE}
+
+# Reasonable retry/backoff for a flaky home LAN.
+TimeoutStartSec=5min
+
+# --- Hardening ---------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Needs to read the log tree and the rclone config; writes nothing locally.
+ReadOnlyPaths=/var/lib/housemon /etc/housemon

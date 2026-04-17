@@ -1,0 +1,54 @@
+[Unit]
+Description=HouseMon RF12demo serial logger
+Documentation=https://github.com/kduvekot/jeenode-listener
+# Only run while the JeeLink is actually plugged in.
+BindsTo=dev-ttyUSB0.device
+After=dev-ttyUSB0.device
+
+[Service]
+Type=simple
+
+# Dedicated unprivileged system user. Member of `dialout` for /dev/ttyUSB0.
+User=housemon
+Group=housemon
+SupplementaryGroups=dialout
+
+WorkingDirectory=/var/lib/housemon
+
+# uv reads the inline script metadata (PEP 723) and resolves pyserial once
+# into /var/lib/housemon/.cache/uv on first run.
+ExecStart=/usr/local/bin/uv run --script /opt/housemon/housemon-logger.py \
+    --logdir /var/lib/housemon/logger
+
+Restart=on-failure
+RestartSec=5s
+
+# --- Hardening ---------------------------------------------------------------
+# The logger has exactly one job: read /dev/ttyUSB0 and append to files under
+# /var/lib/housemon/logger. It needs no network whatsoever -- S3/MinIO sync is
+# handled by a separate timer-driven unit (housemon-sync.service).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+# No network sockets at all -- only AF_UNIX for journald logging.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/housemon
+
+[Install]
+WantedBy=dev-ttyUSB0.device
