@@ -8,22 +8,53 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/opt/housemon
 
-# BUCKET (and optionally AWS_* / UV_CACHE_DIR) live here, out of the unit file.
+# Dedicated unprivileged system user. Member of `dialout` for /dev/ttyUSB0.
+User=housemon
+Group=housemon
+SupplementaryGroups=dialout
+
+# Home of the `housemon` user; holds the uv cache and the log tree.
+WorkingDirectory=/var/lib/housemon
+
+# BUCKET (and optionally AWS_* vars) live here, out of the unit file.
 EnvironmentFile=/etc/housemon/logger.env
 
 # uv reads the inline script metadata (PEP 723) and resolves deps on first run.
-ExecStart=/usr/local/bin/uv run --script /opt/housemon/housemon-logger.py --bucket ${BUCKET}
+ExecStart=/usr/local/bin/uv run --script /opt/housemon/housemon-logger.py \
+    --logdir /var/lib/housemon/logger \
+    --bucket ${BUCKET}
 
 Restart=on-failure
 RestartSec=5s
 
-# Mild hardening; the service only needs to read /dev/ttyUSB0 and write logs.
+# --- Hardening ---------------------------------------------------------------
+# The service has one job: read a USB serial device and write files under
+# /var/lib/housemon. Everything else is locked down.
+# All directives below are available on systemd >= 247 (Raspberry Pi OS
+# Trixie ships systemd 257 and a 6.12 LTS kernel, so everything is supported).
 NoNewPrivileges=true
-ProtectSystem=full
 PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+# Only AF_UNIX (dns resolver / syslog) and IPv4/6 (HTTPS to S3) are needed.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Only this path is writable.
+ReadWritePaths=/var/lib/housemon
 
 [Install]
 # Start whenever the USB device appears, not just at boot.
