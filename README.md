@@ -17,26 +17,43 @@ plus the distro-packaged `rclone` for the sync side.
 
 ## Quick install
 
+No `git` clone required — the installer pulls every file it needs from
+GitHub raw URLs:
+
 ```bash
-git clone https://github.com/kduvekot/jeenode-listener.git
-cd jeenode-listener
-sudo ./install.sh
+curl -LsSf https://raw.githubusercontent.com/kduvekot/jeenode-listener/main/install.sh \
+    | sudo bash
 ```
 
-That runs the idempotent [`install.sh`](install.sh), which:
+Pin to a tag or commit (recommended for production — `main` moves):
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/kduvekot/jeenode-listener/v0.2.0/install.sh \
+    | sudo bash -s -- --ref v0.2.0
+```
+
+Paranoid variant — download, read, then run:
+
+```bash
+curl -LsSfO https://raw.githubusercontent.com/kduvekot/jeenode-listener/main/install.sh
+less install.sh          # audit it
+sudo bash install.sh     # run it
+```
+
+What [`install.sh`](install.sh) does, in order:
 
 - apt-installs `rclone` + `curl` + `ca-certificates`,
-- installs `uv` into `/usr/local/bin` if not already present,
-- creates the `housemon` system user (with `dialout` group membership),
-- drops the logger under `/opt/housemon/` and the three unit files under
+- installs `uv` into `/usr/local/bin` (if not already present),
+- creates the `housemon` system user with `dialout` group membership,
+- drops the logger under `/opt/housemon/` and the three systemd units under
   `/etc/systemd/system/`,
-- prepares `/etc/housemon/` (for the rclone config + sync env),
+- creates `/etc/housemon/` (for `rclone.conf` + `sync.env`),
 - warms the `uv` cache so the first service start is instant,
 - prints the three commands left for you (rclone config, enable logger,
   enable sync timer).
 
-Re-run it any time to pick up new commits — every step checks for existing
-state.
+Re-run it any time to pick up a new ref — every step checks for existing
+state, so this is also the upgrade path.
 
 If you'd rather understand what each step does before running a script, the
 [step-by-step instructions](#install-on-a-raspberry-pi) below do the same

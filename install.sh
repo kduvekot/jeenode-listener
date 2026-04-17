@@ -1,32 +1,92 @@
 #!/usr/bin/env bash
 # install.sh -- idempotent installer for jeenode-listener on Raspberry Pi OS.
 #
-# Usage (from a clone of the repo):
+# Usage (no git clone required):
+#     curl -LsSf https://raw.githubusercontent.com/kduvekot/jeenode-listener/main/install.sh \
+#         | sudo bash
+#
+# Pin to a tag / branch / commit:
+#     curl -LsSf https://raw.githubusercontent.com/kduvekot/jeenode-listener/v0.2.0/install.sh \
+#         | sudo bash -s -- --ref v0.2.0
+#
+# From a local checkout:
 #     sudo ./install.sh
 #
-# Safe to re-run: every step checks for existing state before acting, so you
-# can use this to upgrade the script / units in place as well.
+# Safe to re-run: every step checks for existing state before acting, so this
+# is also the upgrade path -- point it at a newer ref and re-run.
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ---------------------------------------------------------------------------
+# Args / config
+# ---------------------------------------------------------------------------
+REPO="${REPO:-kduvekot/jeenode-listener}"
+REF="${REF:-main}"
 
-say() { printf '==> %s\n' "$*"; }
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --ref)     REF="$2"; shift 2 ;;
+        --ref=*)   REF="${1#--ref=}"; shift ;;
+        --repo)    REPO="$2"; shift 2 ;;
+        --repo=*)  REPO="${1#--repo=}"; shift ;;
+        -h|--help)
+            cat <<EOF
+Usage: install.sh [--ref <git-ref>] [--repo <owner/repo>]
+
+Options:
+  --ref   git ref (branch, tag, or commit) to fetch files from; default: main
+  --repo  owner/repo on GitHub; default: kduvekot/jeenode-listener
+
+If run from a repo checkout (files present next to install.sh), the local
+files are used instead of fetching from GitHub.
+EOF
+            exit 0 ;;
+        *) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
+    esac
+done
+
+BASE_URL="https://raw.githubusercontent.com/${REPO}/${REF}"
+
+say()  { printf '==> %s\n' "$*"; }
 warn() { printf 'WARN: %s\n' "$*" >&2; }
 
 if [[ ${EUID} -ne 0 ]]; then
-    echo "install.sh must be run as root (try: sudo $0)" >&2
+    echo "install.sh must be run as root (e.g. piped into 'sudo bash')" >&2
     exit 1
 fi
 
-# Sanity-check we're running from the repo, not some random cwd.
-for f in housemon-logger.py housemon-logger.service \
-         housemon-sync.service housemon-sync.timer; do
-    if [[ ! -f "${SCRIPT_DIR}/${f}" ]]; then
-        echo "missing ${f} next to install.sh -- are you in the repo?" >&2
-        exit 1
+# ---------------------------------------------------------------------------
+# Staging: either copy from the local checkout, or fetch from GitHub raw.
+# ---------------------------------------------------------------------------
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
+STAGE="$(mktemp -d)"
+trap 'rm -rf "${STAGE}"' EXIT
+
+fetch() {
+    local rel="$1" dst="${STAGE}/${1}"
+    mkdir -p "$(dirname "${dst}")"
+    if [[ -n "${SCRIPT_DIR}" && -f "${SCRIPT_DIR}/${rel}" ]]; then
+        cp "${SCRIPT_DIR}/${rel}" "${dst}"
+    else
+        printf '    curl %s\n' "${BASE_URL}/${rel}"
+        curl -LsSf --retry 3 --retry-delay 2 "${BASE_URL}/${rel}" -o "${dst}"
     fi
-done
+}
+
+if [[ -n "${SCRIPT_DIR}" && -f "${SCRIPT_DIR}/housemon-logger.py" ]]; then
+    say "Using local files from ${SCRIPT_DIR}"
+else
+    say "Fetching files from ${BASE_URL}"
+fi
+
+fetch housemon-logger.py
+fetch housemon-logger.service
+fetch housemon-sync.service
+fetch housemon-sync.timer
 
 # ---------------------------------------------------------------------------
 # apt prerequisites
@@ -62,25 +122,24 @@ if ! getent passwd housemon >/dev/null; then
 else
     say "housemon user already exists; ensuring dialout membership"
     usermod -aG dialout housemon
-    # create-home isn't idempotent; make sure the dir exists for re-runs
     install -d -o housemon -g housemon -m 0755 /var/lib/housemon
 fi
 
 # ---------------------------------------------------------------------------
-# files
+# Files
 # ---------------------------------------------------------------------------
 say "Installing logger script to /opt/housemon/"
 install -d -o root -g root -m 0755 /opt/housemon
 install -o root -g housemon -m 0644 \
-    "${SCRIPT_DIR}/housemon-logger.py" /opt/housemon/housemon-logger.py
+    "${STAGE}/housemon-logger.py" /opt/housemon/housemon-logger.py
 
 say "Installing systemd units to /etc/systemd/system/"
 install -o root -g root -m 0644 \
-    "${SCRIPT_DIR}/housemon-logger.service" /etc/systemd/system/housemon-logger.service
+    "${STAGE}/housemon-logger.service" /etc/systemd/system/housemon-logger.service
 install -o root -g root -m 0644 \
-    "${SCRIPT_DIR}/housemon-sync.service"   /etc/systemd/system/housemon-sync.service
+    "${STAGE}/housemon-sync.service"   /etc/systemd/system/housemon-sync.service
 install -o root -g root -m 0644 \
-    "${SCRIPT_DIR}/housemon-sync.timer"     /etc/systemd/system/housemon-sync.timer
+    "${STAGE}/housemon-sync.timer"     /etc/systemd/system/housemon-sync.timer
 
 say "Preparing /etc/housemon (for rclone.conf and sync.env)"
 install -d -o root -g housemon -m 0750 /etc/housemon
@@ -91,8 +150,8 @@ install -d -o root -g housemon -m 0750 /etc/housemon
 say "Reloading systemd"
 systemctl daemon-reload
 
-# Warm the uv cache as the housemon user so the first journal entry from the
-# service isn't "resolving pyserial...". Harmless if it fails (e.g. no net).
+# Warm the uv cache as the housemon user so the first service start doesn't
+# stall on pyserial resolution. Harmless if it fails (e.g. no net).
 if command -v uv >/dev/null 2>&1; then
     say "Warming uv cache for housemon (resolves pyserial)"
     if ! sudo -u housemon \
@@ -107,8 +166,8 @@ cat <<'EOF'
 
 ==> Install complete.
 
-The logger unit is NOT enabled yet -- review/configure the rclone side first
-(or skip it for local-only operation).
+The logger is NOT enabled yet -- configure the rclone side first (or skip it
+for local-only operation).
 
 Quick next steps:
 
