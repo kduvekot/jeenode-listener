@@ -126,8 +126,11 @@ python3 housemon-logger.py \
 ```
 
 Defaults match the stock JeeLabs `jeelib/RF12demo` sketch — real networks
-nearly always diverge. The `b` command only accepts `1` (433 MHz), `2`
-(868 MHz), or `3` (915 MHz); other values are ignored by the firmware.
+nearly always diverge. The stock `b` command accepts `1` (433 MHz), `2`
+(868 MHz), or `3` (915 MHz), but older and forked firmware variants extend
+it with additional band / frequency-offset slots — consult your firmware's
+built-in `?` help (hit `?` in a serial terminal) for the full list it
+accepts.
 
 Under systemd these are populated from `/etc/housemon/housemon.conf` so you
 rarely call the script by hand — but the flags exist for testing and

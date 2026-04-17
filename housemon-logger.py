@@ -44,10 +44,12 @@ import serial
 # RF12demo radio parameter defaults. These match the stock JeeLabs
 # `jeelib/RF12demo` sketch defaults (node 1, group 0xD4=212, band 2=868MHz).
 # Override per-invocation with --node-id / --group / --band (populated from
-# /etc/housemon/housemon.conf when running under systemd).
+# /etc/housemon/housemon.conf when running under systemd). Some older and
+# forked RF12demo builds extend the `b` command beyond 1/2/3 -- consult your
+# firmware's `?` help to see what it accepts.
 DEFAULT_RF12_NODE_ID = 1
 DEFAULT_RF12_GROUP = 212
-DEFAULT_RF12_BAND = 2  # 1=433MHz, 2=868MHz, 3=915MHz
+DEFAULT_RF12_BAND = 2
 
 # Timing knobs.
 RECONNECT_DELAY = 5.0       # seconds between serial reconnect attempts
@@ -239,8 +241,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--group", type=int, default=DEFAULT_RF12_GROUP,
                    help=f"RF12 network group 1..212 (default: {DEFAULT_RF12_GROUP})")
     p.add_argument("--band", type=int, default=DEFAULT_RF12_BAND,
-                   help="RF12 band: 1=433MHz, 2=868MHz, 3=915MHz "
-                        f"(default: {DEFAULT_RF12_BAND})")
+                   help="RF12 band code. Stock jeelib RF12demo accepts "
+                        "1=433MHz, 2=868MHz, 3=915MHz; older versions and "
+                        "forks may accept additional values (consult your "
+                        f"firmware's `?` help). Default: {DEFAULT_RF12_BAND}")
     return p.parse_args(argv)
 
 

@@ -66,7 +66,8 @@ Options (all optional):
   --baud <int>           baud rate (default: 57600)
   --node-id <1..30>      RF12 node id (default: 1)
   --group <1..212>       RF12 network group (default: 212)
-  --band <1|2|3>         RF12 band: 1=433MHz, 2=868MHz, 3=915MHz (default: 2)
+  --band <int>           RF12 band code (stock: 1=433, 2=868, 3=915 MHz;
+                         older/forked firmwares may accept more). (default: 2)
   --remote <rclone>      rclone remote for sync, e.g. minio:housemon/logger
                          (default: empty = sync disabled)
 
@@ -167,7 +168,7 @@ if [[ "$ASSUME_YES" == false && -t 0 && "$CONFIG_EXISTS" == false ]]; then
     prompt_if_unset "$CLI_BAUD"    SERIAL_BAUD   "Baud rate"
     prompt_if_unset "$CLI_NODE_ID" RF12_NODE_ID  "RF12 node id (1..30)"
     prompt_if_unset "$CLI_GROUP"   RF12_GROUP    "RF12 group (1..212)"
-    prompt_if_unset "$CLI_BAND"    RF12_BAND     "RF12 band (1=433MHz, 2=868MHz, 3=915MHz)"
+    prompt_if_unset "$CLI_BAND"    RF12_BAND     "RF12 band (stock: 1=433 2=868 3=915; check your firmware's ? help)"
     prompt_if_unset "$CLI_REMOTE"  REMOTE        "rclone remote for sync (empty to skip)"
     echo
 elif [[ "$CONFIG_EXISTS" == true ]]; then
@@ -274,7 +275,8 @@ SERIAL_DEVICE=${SERIAL_DEVICE}
 SERIAL_BAUD=${SERIAL_BAUD}
 
 # RF12 radio settings -- must match the transmitters in your network.
-# BAND: 1=433MHz, 2=868MHz, 3=915MHz.
+# BAND: stock jeelib RF12demo accepts 1=433MHz, 2=868MHz, 3=915MHz;
+# older / forked firmware may accept additional values -- check its `?` help.
 RF12_NODE_ID=${RF12_NODE_ID}
 RF12_GROUP=${RF12_GROUP}
 RF12_BAND=${RF12_BAND}
