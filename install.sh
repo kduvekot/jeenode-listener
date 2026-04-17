@@ -91,21 +91,13 @@ fetch housemon-sync.timer
 # ---------------------------------------------------------------------------
 # apt prerequisites
 # ---------------------------------------------------------------------------
-say "Installing apt prerequisites (rclone, curl, ca-certificates)"
+# python3 + python3-serial are the logger's only runtime deps.
+# rclone is for the sync timer. No uv / no PyPI at runtime.
+say "Installing apt prerequisites (python3-serial, rclone, curl, ca-certificates)"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y --no-install-recommends rclone curl ca-certificates
-
-# ---------------------------------------------------------------------------
-# uv (system-wide)
-# ---------------------------------------------------------------------------
-if ! command -v uv >/dev/null 2>&1; then
-    say "Installing uv into /usr/local/bin"
-    curl -LsSf https://astral.sh/uv/install.sh \
-        | env UV_INSTALL_DIR=/usr/local/bin UV_UNMANAGED_INSTALL=1 sh
-else
-    say "uv already installed ($(command -v uv))"
-fi
+apt-get install -y --no-install-recommends \
+    python3 python3-serial rclone curl ca-certificates
 
 # ---------------------------------------------------------------------------
 # housemon system user
@@ -150,16 +142,12 @@ install -d -o root -g housemon -m 0750 /etc/housemon
 say "Reloading systemd"
 systemctl daemon-reload
 
-# Warm the uv cache as the housemon user so the first service start doesn't
-# stall on pyserial resolution. Harmless if it fails (e.g. no net).
-if command -v uv >/dev/null 2>&1; then
-    say "Warming uv cache for housemon (resolves pyserial)"
-    if ! sudo -u housemon \
-        HOME=/var/lib/housemon \
-        /usr/local/bin/uv run --script /opt/housemon/housemon-logger.py --help \
-        >/dev/null 2>&1; then
-        warn "uv warm-up failed; first service start will fetch pyserial instead"
-    fi
+# Sanity-check: the logger should at least print --help with the just-installed
+# apt-packaged pyserial. Any ImportError here means the system python3 can't
+# import `serial` and the service will fail -- fail early and loud instead.
+say "Checking that python3 can import pyserial"
+if ! /usr/bin/python3 /opt/housemon/housemon-logger.py --help >/dev/null; then
+    warn "housemon-logger.py --help failed -- check python3-serial install"
 fi
 
 cat <<'EOF'
