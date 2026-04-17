@@ -29,11 +29,14 @@ set -euo pipefail
 REPO="${REPO:-kduvekot/jeenode-listener}"
 REF="${REF:-main}"
 
+# RF12demo's own defaults (node 1, group 212=0xD4, band 2=868MHz). Real
+# networks almost always diverge from these -- see the interactive prompts
+# or the --node-id / --group / --band CLI flags to override.
 DEFAULT_SERIAL_DEVICE=/dev/ttyUSB0
 DEFAULT_SERIAL_BAUD=57600
-DEFAULT_RF12_NODE_ID=31
-DEFAULT_RF12_GROUP=125
-DEFAULT_RF12_BAND=8
+DEFAULT_RF12_NODE_ID=1
+DEFAULT_RF12_GROUP=212
+DEFAULT_RF12_BAND=2
 DEFAULT_REMOTE=
 
 CONFIG=/etc/housemon/housemon.conf
@@ -61,9 +64,9 @@ Options (all optional):
 
   --device <path>        serial device (default: /dev/ttyUSB0)
   --baud <int>           baud rate (default: 57600)
-  --node-id <1..31>      RF12 node id (default: 31)
-  --group <1..212>       RF12 network group (default: 125)
-  --band <1|2|3|...>     RF12 band (default: 8 = legacy 868MHz)
+  --node-id <1..30>      RF12 node id (default: 1)
+  --group <1..212>       RF12 network group (default: 212)
+  --band <1|2|3>         RF12 band: 1=433MHz, 2=868MHz, 3=915MHz (default: 2)
   --remote <rclone>      rclone remote for sync, e.g. minio:housemon/logger
                          (default: empty = sync disabled)
 
@@ -162,9 +165,9 @@ if [[ "$ASSUME_YES" == false && -t 0 && "$CONFIG_EXISTS" == false ]]; then
     echo
     prompt_if_unset "$CLI_DEVICE"  SERIAL_DEVICE "Serial device"
     prompt_if_unset "$CLI_BAUD"    SERIAL_BAUD   "Baud rate"
-    prompt_if_unset "$CLI_NODE_ID" RF12_NODE_ID  "RF12 node id (1..31)"
+    prompt_if_unset "$CLI_NODE_ID" RF12_NODE_ID  "RF12 node id (1..30)"
     prompt_if_unset "$CLI_GROUP"   RF12_GROUP    "RF12 group (1..212)"
-    prompt_if_unset "$CLI_BAND"    RF12_BAND     "RF12 band (1=433 2=868 3=915, 8=legacy 868)"
+    prompt_if_unset "$CLI_BAND"    RF12_BAND     "RF12 band (1=433MHz, 2=868MHz, 3=915MHz)"
     prompt_if_unset "$CLI_REMOTE"  REMOTE        "rclone remote for sync (empty to skip)"
     echo
 elif [[ "$CONFIG_EXISTS" == true ]]; then
@@ -271,7 +274,7 @@ SERIAL_DEVICE=${SERIAL_DEVICE}
 SERIAL_BAUD=${SERIAL_BAUD}
 
 # RF12 radio settings -- must match the transmitters in your network.
-# BAND: 1=433MHz, 2=868MHz, 3=915MHz (8 = legacy 868 on many RF12demo builds).
+# BAND: 1=433MHz, 2=868MHz, 3=915MHz.
 RF12_NODE_ID=${RF12_NODE_ID}
 RF12_GROUP=${RF12_GROUP}
 RF12_BAND=${RF12_BAND}
