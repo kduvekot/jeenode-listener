@@ -20,8 +20,10 @@ automatically at midnight because the target path is recomputed on every
 packet.
 
 If an S3 bucket is configured, the current file is uploaded every 60 seconds
-and on every rollover and clean shutdown. Without a bucket the S3 side is a
-no-op.
+and on every rollover and clean shutdown. Works with AWS S3 and any
+S3-compatible backend (MinIO, Ceph RGW, Cloudflare R2, Backblaze B2, Wasabi,
+...) via --s3-endpoint / --s3-region / --s3-addressing-style. Without a
+bucket the S3 side is a no-op.
 """
 
 import argparse
@@ -56,8 +58,11 @@ SERIAL_READ_TIMEOUT = 1.0   # seconds per readline() so we can check signals
 DEFAULT_DEVICE = "/dev/ttyUSB0"
 DEFAULT_BAUD = 57600
 DEFAULT_LOGDIR = "~/housemon/logger"
-DEFAULT_BUCKET = ""          # empty string disables S3
+DEFAULT_BUCKET = ""              # empty string disables S3
 DEFAULT_S3_PREFIX = "logger"
+DEFAULT_S3_ENDPOINT = ""         # empty = AWS default; set for MinIO/R2/B2/etc.
+DEFAULT_S3_REGION = ""           # empty = boto3 default credential / env chain
+DEFAULT_S3_ADDRESSING = ""       # "", "auto", "path", or "virtual"
 
 log = logging.getLogger("housemon-logger")
 
@@ -109,10 +114,21 @@ class S3Uploader:
     If no bucket was configured this class is a no-op.
     """
 
-    def __init__(self, bucket: str, prefix: str, logdir: Path):
+    def __init__(
+        self,
+        bucket: str,
+        prefix: str,
+        logdir: Path,
+        endpoint_url: str = "",
+        region: str = "",
+        addressing_style: str = "",
+    ):
         self.bucket = bucket
         self.prefix = prefix.strip("/")
         self.logdir = logdir
+        self.endpoint_url = endpoint_url
+        self.region = region
+        self.addressing_style = addressing_style
         self.enabled = bool(bucket)
         self.client = None
         self._stop = threading.Event()
@@ -121,10 +137,26 @@ class S3Uploader:
         self._lock = threading.Lock()
 
         if self.enabled:
-            # Import boto3 lazily so that the script can run without AWS deps
+            # Import boto3 lazily so the script can run without AWS deps
             # resolved in S3-disabled mode (though with uv they always are).
             import boto3
-            self.client = boto3.client("s3")
+            from botocore.config import Config
+
+            s3_opts = {}
+            if addressing_style:
+                s3_opts["addressing_style"] = addressing_style
+            config = Config(
+                s3=s3_opts or None,
+                retries={"mode": "standard", "max_attempts": 3},
+            )
+
+            client_kwargs = {"config": config}
+            if endpoint_url:
+                client_kwargs["endpoint_url"] = endpoint_url
+            if region:
+                client_kwargs["region_name"] = region
+
+            self.client = boto3.client("s3", **client_kwargs)
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -138,7 +170,14 @@ class S3Uploader:
             daemon=True,
         )
         self._thread.start()
-        log.info("S3 uploader started (bucket=%s prefix=%s)", self.bucket, self.prefix)
+        log.info(
+            "S3 uploader started (bucket=%s prefix=%s endpoint=%s region=%s style=%s)",
+            self.bucket,
+            self.prefix,
+            self.endpoint_url or "<aws-default>",
+            self.region or "<default>",
+            self.addressing_style or "<auto>",
+        )
 
     def final_sync(self) -> None:
         if not self.enabled:
@@ -307,6 +346,16 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="S3 bucket for backups; empty disables S3")
     p.add_argument("--s3-prefix", default=DEFAULT_S3_PREFIX,
                    help=f"S3 key prefix (default: {DEFAULT_S3_PREFIX})")
+    p.add_argument("--s3-endpoint", default=DEFAULT_S3_ENDPOINT,
+                   help="S3 endpoint URL for non-AWS backends "
+                        "(e.g. https://minio.lan, https://<acct>.r2.cloudflarestorage.com). "
+                        "Empty uses the AWS default.")
+    p.add_argument("--s3-region", default=DEFAULT_S3_REGION,
+                   help="S3 region name. Empty uses the boto3 default chain.")
+    p.add_argument("--s3-addressing-style", default=DEFAULT_S3_ADDRESSING,
+                   choices=["", "auto", "path", "virtual"],
+                   help="S3 addressing style. 'path' for most self-hosted "
+                        "MinIO/Ceph setups; 'virtual' for R2/B2; empty=auto.")
     return p.parse_args(argv)
 
 
@@ -322,7 +371,14 @@ def main(argv=None) -> int:
     logdir.mkdir(parents=True, exist_ok=True)
     log.info("logdir=%s device=%s baud=%d", logdir, args.device, args.baud)
 
-    uploader = S3Uploader(args.bucket, args.s3_prefix, logdir)
+    uploader = S3Uploader(
+        bucket=args.bucket,
+        prefix=args.s3_prefix,
+        logdir=logdir,
+        endpoint_url=args.s3_endpoint,
+        region=args.s3_region,
+        addressing_style=args.s3_addressing_style,
+    )
     uploader.start()
 
     listener = SerialListener(args.device, args.baud, logdir, uploader)

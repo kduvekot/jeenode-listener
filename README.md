@@ -3,7 +3,8 @@
 A tiny, production-ready daemon that listens to a
 [JeeLink](https://jeelabs.net/) running the stock `RF12demo` sketch, timestamps
 every received packet, writes it to a daily-rotated log file on disk, and
-(optionally) mirrors those files to an S3 bucket.
+(optionally) mirrors those files to any **S3-compatible** bucket — AWS S3,
+MinIO / Ceph RGW, Cloudflare R2, Backblaze B2, Wasabi, etc.
 
 Built to run 24x7 on a Raspberry Pi 1 (**Raspberry Pi OS Lite 32-bit**, which
 is Debian Trixie / ARMv6) under systemd, using nothing more than `pyserial` +
@@ -35,7 +36,10 @@ uv run housemon-logger.py \
     [--baud 57600] \
     [--logdir ~/housemon/logger] \
     [--bucket MYBUCKET] \
-    [--s3-prefix logger]
+    [--s3-prefix logger] \
+    [--s3-endpoint https://...] \
+    [--s3-region us-east-1] \
+    [--s3-addressing-style auto|path|virtual]
 ```
 
 RF12 radio parameters (`node id`, `group`, `band`) are constants at the top of
@@ -113,32 +117,80 @@ The first time the service starts, `uv` fetches `pyserial` and `boto3` into
 `/var/lib/housemon/.cache/uv/`. That takes a minute on a Pi 1; subsequent runs
 are instant.
 
-### 4. Configure AWS credentials (optional)
+### 4. Configure the S3 backend (optional)
 
 Skip this section if you don't want S3 backup. Without a bucket the logger
 happily runs local-only.
 
+The uploader speaks plain S3, so **any S3-compatible object store works** —
+it's not tied to AWS. You pick the backend by setting `S3_ENDPOINT` (and
+usually `S3_ADDRESSING_STYLE`). The unit file passes those through to the
+script as CLI flags.
+
 Create `/etc/housemon/logger.env` owned by `root:housemon`, mode `0640`, so
-the service can read it but no other users can:
+the service can read it but no other users can. The shared bits:
 
 ```ini
-# S3 bucket; leave BUCKET="" to disable uploads entirely.
+# The bucket to upload to. Leave BUCKET="" to disable uploads entirely.
 BUCKET=my-housemon-bucket
 
-# Standard boto3 env vars. (Alternatively drop a credentials file in
+# Standard boto3 credentials. (Or drop a credentials file in
 # /var/lib/housemon/.aws/credentials owned by housemon:housemon, mode 0600.)
-AWS_DEFAULT_REGION=eu-west-1
-AWS_ACCESS_KEY_ID=AKIAxxxxxxxxxxxxxxxx
+AWS_ACCESS_KEY_ID=xxxxxxxxxxxxxxxxxxxx
 AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Custom CA bundle (only needed for self-signed MinIO / internal CA setups).
+# AWS_CA_BUNDLE=/etc/ssl/certs/my-internal-ca.pem
 ```
+
+Plus **one** of these backend blocks:
+
+**AWS S3 (original flavour):**
+```ini
+S3_ENDPOINT=
+S3_REGION=eu-west-1
+S3_ADDRESSING_STYLE=
+```
+
+**MinIO / Ceph RGW (self-hosted, typically path-style):**
+```ini
+S3_ENDPOINT=https://minio.lan:9000
+S3_REGION=us-east-1
+S3_ADDRESSING_STYLE=path
+```
+
+**Cloudflare R2:**
+```ini
+S3_ENDPOINT=https://<accountid>.r2.cloudflarestorage.com
+S3_REGION=auto
+S3_ADDRESSING_STYLE=virtual
+```
+
+**Backblaze B2 (S3-compatible API):**
+```ini
+S3_ENDPOINT=https://s3.<region>.backblazeb2.com
+S3_REGION=<region>
+S3_ADDRESSING_STYLE=virtual
+```
+
+**Wasabi:**
+```ini
+S3_ENDPOINT=https://s3.<region>.wasabisys.com
+S3_REGION=<region>
+S3_ADDRESSING_STYLE=virtual
+```
+
+Then install the file:
 
 ```bash
 sudo mkdir -p /etc/housemon
 sudo install -o root -g housemon -m 0640 logger.env /etc/housemon/logger.env
 ```
 
-The IAM principal only needs `s3:PutObject` on
-`arn:aws:s3:::my-housemon-bucket/logger/*`.
+The credentials only need **`PutObject`** on
+`<bucket>/logger/*`. On AWS that's the IAM action `s3:PutObject`; on MinIO
+it's the equivalent `s3:PutObject` policy statement; on R2/B2 it's a bucket
+key limited to write-only object creation under the `logger/` prefix.
 
 ### 5. Install and enable the systemd unit
 
@@ -191,10 +243,18 @@ You should see one `L ...` line per received RF12 packet. If you don't:
 ### 8. Confirm S3 uploads
 
 Uploads fire every 60s, at every midnight rollover, and once more on clean
-shutdown. Check with:
+shutdown. Check with whichever CLI matches your backend, e.g.:
 
 ```bash
-aws s3 ls s3://my-housemon-bucket/logger/$(date -u +%Y)/
+# AWS S3 / any S3-compatible store (aws-cli supports --endpoint-url)
+aws s3 ls --endpoint-url "${S3_ENDPOINT:-https://s3.amazonaws.com}" \
+    s3://my-housemon-bucket/logger/$(date -u +%Y)/
+
+# MinIO
+mc ls myminio/my-housemon-bucket/logger/$(date -u +%Y)/
+
+# Cloudflare R2
+rclone ls r2:my-housemon-bucket/logger/$(date -u +%Y)/
 ```
 
 You should see today's `YYYYMMDD.txt` with a modification time within the last
