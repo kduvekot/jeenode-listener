@@ -41,10 +41,12 @@ import serial
 # Configuration constants
 # ---------------------------------------------------------------------------
 
-# RF12demo radio parameters baked in at the top of the file (not CLI args).
-RF12_NODE_ID = 31
-RF12_GROUP = 125
-RF12_BAND = 8  # 1=433, 2=868, 3=915 -- 8 is what this install uses
+# RF12demo radio parameter defaults. Override per-invocation with
+# --node-id / --group / --band (populated from /etc/housemon/housemon.conf
+# when running under systemd).
+DEFAULT_RF12_NODE_ID = 31
+DEFAULT_RF12_GROUP = 125
+DEFAULT_RF12_BAND = 8  # 1=433, 2=868, 3=915 -- 8 is legacy 868 on many setups
 
 # Timing knobs.
 RECONNECT_DELAY = 5.0       # seconds between serial reconnect attempts
@@ -94,10 +96,21 @@ def append_line(logdir: Path, now: datetime, line: str) -> None:
 class SerialListener:
     """Owns the serial port, handles (re)connection, configuration and logging."""
 
-    def __init__(self, device: str, baud: int, logdir: Path):
+    def __init__(
+        self,
+        device: str,
+        baud: int,
+        logdir: Path,
+        node_id: int,
+        group: int,
+        band: int,
+    ):
         self.device = device
         self.baud = baud
         self.logdir = logdir
+        self.node_id = node_id
+        self.group = group
+        self.band = band
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -180,9 +193,9 @@ class SerialListener:
                 break
 
         for cmd in (
-            f"{RF12_BAND}b",
-            f"{RF12_GROUP}g",
-            f"{RF12_NODE_ID}i",
+            f"{self.band}b",
+            f"{self.group}g",
+            f"{self.node_id}i",
         ):
             ser.write(cmd.encode() + b"\r\n")
             ser.flush()
@@ -220,6 +233,13 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help=f"baud rate (default: {DEFAULT_BAUD})")
     p.add_argument("--logdir", default=DEFAULT_LOGDIR,
                    help=f"local log directory (default: {DEFAULT_LOGDIR})")
+    p.add_argument("--node-id", type=int, default=DEFAULT_RF12_NODE_ID,
+                   help=f"RF12 node id 1..31 (default: {DEFAULT_RF12_NODE_ID})")
+    p.add_argument("--group", type=int, default=DEFAULT_RF12_GROUP,
+                   help=f"RF12 network group 1..212 (default: {DEFAULT_RF12_GROUP})")
+    p.add_argument("--band", type=int, default=DEFAULT_RF12_BAND,
+                   help="RF12 band: 1=433MHz, 2=868MHz, 3=915MHz "
+                        f"(default: {DEFAULT_RF12_BAND})")
     return p.parse_args(argv)
 
 
@@ -233,9 +253,19 @@ def main(argv=None) -> int:
 
     logdir = Path(os.path.expanduser(args.logdir)).resolve()
     logdir.mkdir(parents=True, exist_ok=True)
-    log.info("logdir=%s device=%s baud=%d", logdir, args.device, args.baud)
+    log.info(
+        "logdir=%s device=%s baud=%d node=%d group=%d band=%d",
+        logdir, args.device, args.baud, args.node_id, args.group, args.band,
+    )
 
-    listener = SerialListener(args.device, args.baud, logdir)
+    listener = SerialListener(
+        device=args.device,
+        baud=args.baud,
+        logdir=logdir,
+        node_id=args.node_id,
+        group=args.group,
+        band=args.band,
+    )
 
     def handle_signal(signum, _frame):
         log.info("received signal %d, shutting down", signum)

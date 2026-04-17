@@ -21,26 +21,46 @@ development off-box.)
 ## Quick install
 
 No `git` clone required — the installer pulls every file it needs from
-GitHub raw URLs:
+GitHub raw URLs.
+
+**Easy path (download, answer a few questions, run):**
+
+```bash
+curl -LsSfO https://raw.githubusercontent.com/kduvekot/jeenode-listener/main/install.sh
+sudo bash install.sh
+```
+
+When run with a real terminal attached, the script prompts for the
+site-specific values (serial device, baud, RF12 node id / group / band,
+optional rclone remote) on a fresh install. Just press Enter to accept
+each default.
+
+**Non-interactive / automation (CLI flags):**
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/kduvekot/jeenode-listener/main/install.sh \
+    | sudo bash -s -- \
+        --node-id 42 --group 12 --band 8 \
+        --remote minio:housemon/logger
+```
+
+Any flag left off uses its current value from `/etc/housemon/housemon.conf`
+(on re-installs) or the built-in default (on first install). Full list:
+`--device`, `--baud`, `--node-id`, `--group`, `--band`, `--remote`, plus
+`--yes` to skip prompts entirely and `--ref`/`--repo` for pinning.
+
+**Accept-all-defaults (fastest, no prompts even on a TTY):**
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/kduvekot/jeenode-listener/main/install.sh \
     | sudo bash
 ```
 
-Pin to a tag or commit (recommended for production — `main` moves):
+**Pin to a tag** (recommended for production — `main` moves):
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/kduvekot/jeenode-listener/v0.2.0/install.sh \
     | sudo bash -s -- --ref v0.2.0
-```
-
-Paranoid variant — download, read, then run:
-
-```bash
-curl -LsSfO https://raw.githubusercontent.com/kduvekot/jeenode-listener/main/install.sh
-less install.sh          # audit it
-sudo bash install.sh     # run it
 ```
 
 What [`install.sh`](install.sh) does, in order:
@@ -49,7 +69,8 @@ What [`install.sh`](install.sh) does, in order:
 - creates the `housemon` system user with `dialout` group membership,
 - drops the logger under `/opt/housemon/` and the three systemd units under
   `/etc/systemd/system/`,
-- creates `/etc/housemon/` (for `rclone.conf` + `sync.env`),
+- writes `/etc/housemon/housemon.conf` with the resolved site-specific
+  values, and creates `/etc/housemon/` to hold `rclone.conf` later,
 - sanity-checks that `python3 housemon-logger.py --help` runs,
 - prints the three commands left for you (rclone config, enable logger,
   enable sync timer).
@@ -98,13 +119,21 @@ append-mode and open-close per packet, so nothing sits in a buffer on crash.
 python3 housemon-logger.py \
     [--device /dev/ttyUSB0] \
     [--baud 57600] \
-    [--logdir ~/housemon/logger]
+    [--logdir ~/housemon/logger] \
+    [--node-id 31] \
+    [--group 125] \
+    [--band 8]
 ```
 
-(Or `uv run --script housemon-logger.py ...` on a dev box if you prefer.)
+Under systemd these are populated from `/etc/housemon/housemon.conf` so you
+rarely call the script by hand — but the flags exist for testing and
+automation. (`uv run --script housemon-logger.py ...` works too on a dev
+box.)
 
-RF12 radio parameters (`node id`, `group`, `band`) are constants at the top of
-the script — edit them there if you need to change them.
+The built-in defaults for RF12 `node id` / `group` / `band` are constants at
+the top of the script, but production runs override them via CLI flags
+populated from `/etc/housemon/housemon.conf` — you shouldn't need to edit
+the `.py` file.
 
 ---
 
@@ -239,15 +268,22 @@ sudo -u housemon rclone --config /etc/housemon/rclone.conf \
 
 ### 6. Point `housemon-sync` at the remote
 
+Set `REMOTE=` in `/etc/housemon/housemon.conf` (written by `install.sh`) to
+the rclone destination. Easiest is to re-run the installer with `--remote`:
+
 ```bash
-sudo mkdir -p /etc/housemon
-sudo tee /etc/housemon/sync.env >/dev/null <<'EOF'
-# Destination for `rclone copy`. Format: <remote>:<bucket>[/<prefix>]
-REMOTE=minio:housemon/logger
-EOF
-sudo chown root:housemon /etc/housemon/sync.env
-sudo chmod 0640 /etc/housemon/sync.env
+curl -LsSf https://raw.githubusercontent.com/kduvekot/jeenode-listener/main/install.sh \
+    | sudo bash -s -- --remote minio:housemon/logger
 ```
+
+Or hand-edit the file:
+
+```bash
+sudo sed -i 's|^REMOTE=.*|REMOTE=minio:housemon/logger|' /etc/housemon/housemon.conf
+```
+
+The sync service auto-skips (via `ExecCondition`) if `REMOTE` is empty or
+`rclone.conf` is missing, so setting these up in either order is safe.
 
 Then install and enable the timer+service:
 
