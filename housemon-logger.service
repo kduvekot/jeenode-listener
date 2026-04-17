@@ -15,9 +15,11 @@ SupplementaryGroups=dialout
 
 WorkingDirectory=/var/lib/housemon
 
-# uv reads the inline script metadata (PEP 723) and resolves pyserial once
-# into /var/lib/housemon/.cache/uv on first run.
-ExecStart=/usr/local/bin/uv run --script /opt/housemon/housemon-logger.py \
+# Uses the distro's /usr/bin/python3 and the `python3-serial` apt package (no
+# network at runtime, no PEP 723 resolution). The inline script metadata at
+# the top of the .py file is still valid, so `uv run --script ...` works for
+# interactive dev without changing anything here.
+ExecStart=/usr/bin/python3 /opt/housemon/housemon-logger.py \
     --logdir /var/lib/housemon/logger
 
 Restart=on-failure
@@ -26,7 +28,9 @@ RestartSec=5s
 # --- Hardening ---------------------------------------------------------------
 # The logger has exactly one job: read /dev/ttyUSB0 and append to files under
 # /var/lib/housemon/logger. It needs no network whatsoever -- S3/MinIO sync is
-# handled by a separate timer-driven unit (housemon-sync.service).
+# handled by a separate timer-driven unit (housemon-sync.service). Because
+# the service uses apt-installed pyserial (not uv-resolved), there is no
+# first-run network dependency either.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

@@ -10,10 +10,13 @@ S3-compatible bucket** — AWS S3, MinIO / Ceph RGW, Cloudflare R2, Backblaze
 B2, Wasabi, etc. — or, equally, a WebDAV / SFTP / Google Drive / … remote.
 
 Built to run 24x7 on a Raspberry Pi 1 (**Raspberry Pi OS Lite 32-bit**, which
-is Debian Trixie / ARMv6) under systemd, using nothing more than `pyserial` +
-the Python standard library in the logger itself (driven by
-[`uv`](https://github.com/astral-sh/uv) and PEP 723 inline script metadata),
-plus the distro-packaged `rclone` for the sync side.
+is Debian Trixie / ARMv6) under systemd. Runtime dependencies are all
+distro-packaged: `python3`, `python3-serial` and `rclone` from apt. No
+PyPI, no `uv` at run time, no network needed at first start.
+
+(The script keeps its PEP 723 inline metadata, so
+`uv run --script housemon-logger.py` still works for interactive
+development off-box.)
 
 ## Quick install
 
@@ -42,13 +45,12 @@ sudo bash install.sh     # run it
 
 What [`install.sh`](install.sh) does, in order:
 
-- apt-installs `rclone` + `curl` + `ca-certificates`,
-- installs `uv` into `/usr/local/bin` (if not already present),
+- apt-installs `python3-serial` + `rclone` + `curl` + `ca-certificates`,
 - creates the `housemon` system user with `dialout` group membership,
 - drops the logger under `/opt/housemon/` and the three systemd units under
   `/etc/systemd/system/`,
 - creates `/etc/housemon/` (for `rclone.conf` + `sync.env`),
-- warms the `uv` cache so the first service start is instant,
+- sanity-checks that `python3 housemon-logger.py --help` runs,
 - prints the three commands left for you (rclone config, enable logger,
   enable sync timer).
 
@@ -93,11 +95,13 @@ append-mode and open-close per packet, so nothing sits in a buffer on crash.
 ## Logger CLI
 
 ```
-uv run housemon-logger.py \
+python3 housemon-logger.py \
     [--device /dev/ttyUSB0] \
     [--baud 57600] \
     [--logdir ~/housemon/logger]
 ```
+
+(Or `uv run --script housemon-logger.py ...` on a dev box if you prefer.)
 
 RF12 radio parameters (`node id`, `group`, `band`) are constants at the top of
 the script — edit them there if you need to change them.
@@ -113,32 +117,26 @@ on a Pi 3/4/5. Concretely, the target ships:
 
 - kernel 6.12 LTS (supports all the `Protect*` systemd directives),
 - systemd 257 (supports `ProtectProc`, `RestrictAddressFamilies`, etc.),
-- Python 3.13 (we require `>= 3.9`),
-- `rclone` in apt (`sudo apt install rclone`),
+- Python 3.13 + `python3-serial` in apt,
+- `rclone` in apt,
 - `dialout` as the standard group for USB serial devices.
 
-`pyserial` is pure Python, so there are no wheels to compile on ARMv6 — `uv`
-just downloads and caches it. The logger's resident set is a few MB; easily
-fits alongside other services on a 512 MB Pi 1.
+No PyPI, no compile. The logger's resident set is a few MB; easily fits
+alongside other services on a 512 MB Pi 1.
 
 ## Install on a Raspberry Pi
 
 These steps assume a stock **Raspberry Pi OS Lite 32-bit** image (Debian
 Trixie, ARMv6) on a Pi 1 / Zero W.
 
-### 1. Install `uv` system-wide and `rclone`
+### 1. Install runtime dependencies from apt
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sudo env UV_INSTALL_DIR=/usr/local/bin sh
-sudo apt install -y rclone
+sudo apt install -y --no-install-recommends python3-serial rclone curl ca-certificates
 ```
 
-`uv` goes to `/usr/local/bin/uv` so every user (including the locked-down
-service account below) can reach it.
-
-> **Heads up on ARMv6:** `uv self update` does not work on the musl builds
-> shipped for ARMv6. To upgrade, just re-run the install script above; it
-> overwrites `/usr/local/bin/uv` with the latest release.
+That's the only "install" step with a network requirement — from here on,
+the logger never talks to PyPI.
 
 ### 2. Create a dedicated `housemon` system user
 
@@ -156,8 +154,7 @@ sudo useradd --system \
 
 `/var/lib/housemon` is the user's home and will hold:
 
-- `~/.cache/uv/` — uv's package cache
-- `~/logger/YYYY/YYYYMMDD.txt` — the log tree
+- `~/logger/YYYY/YYYYMMDD.txt` — the log tree.
 
 ### 3. Drop the logger script in place
 
@@ -168,8 +165,8 @@ sudo mkdir -p /opt/housemon
 sudo install -o root -g housemon -m 0644 housemon-logger.py /opt/housemon/
 ```
 
-First start will resolve `pyserial` into `/var/lib/housemon/.cache/uv/` — a
-few seconds on a Pi 1, then instant forever after.
+The service invokes `/usr/bin/python3 /opt/housemon/housemon-logger.py …`
+using the apt-installed `python3-serial`. Nothing is downloaded at run time.
 
 ### 4. Install and enable the logger service
 
