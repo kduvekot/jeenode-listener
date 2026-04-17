@@ -15,6 +15,33 @@ the Python standard library in the logger itself (driven by
 [`uv`](https://github.com/astral-sh/uv) and PEP 723 inline script metadata),
 plus the distro-packaged `rclone` for the sync side.
 
+## Quick install
+
+```bash
+git clone https://github.com/kduvekot/jeenode-listener.git
+cd jeenode-listener
+sudo ./install.sh
+```
+
+That runs the idempotent [`install.sh`](install.sh), which:
+
+- apt-installs `rclone` + `curl` + `ca-certificates`,
+- installs `uv` into `/usr/local/bin` if not already present,
+- creates the `housemon` system user (with `dialout` group membership),
+- drops the logger under `/opt/housemon/` and the three unit files under
+  `/etc/systemd/system/`,
+- prepares `/etc/housemon/` (for the rclone config + sync env),
+- warms the `uv` cache so the first service start is instant,
+- prints the three commands left for you (rclone config, enable logger,
+  enable sync timer).
+
+Re-run it any time to pick up new commits — every step checks for existing
+state.
+
+If you'd rather understand what each step does before running a script, the
+[step-by-step instructions](#install-on-a-raspberry-pi) below do the same
+thing by hand.
+
 ## Architecture
 
 Two cleanly separated units:
