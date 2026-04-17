@@ -1,0 +1,30 @@
+[Unit]
+Description=HouseMon RF12demo serial logger
+Documentation=https://github.com/kduvekot/jeenode-listener
+# Only run while the JeeLink is actually plugged in.
+BindsTo=dev-ttyUSB0.device
+After=dev-ttyUSB0.device network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/housemon
+
+# BUCKET (and optionally AWS_* / UV_CACHE_DIR) live here, out of the unit file.
+EnvironmentFile=/etc/housemon/logger.env
+
+# uv reads the inline script metadata (PEP 723) and resolves deps on first run.
+ExecStart=/usr/local/bin/uv run --script /opt/housemon/housemon-logger.py --bucket ${BUCKET}
+
+Restart=on-failure
+RestartSec=5s
+
+# Mild hardening; the service only needs to read /dev/ttyUSB0 and write logs.
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+# Start whenever the USB device appears, not just at boot.
+WantedBy=dev-ttyUSB0.device
