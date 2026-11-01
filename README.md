@@ -220,6 +220,18 @@ The unit is `BindsTo=dev-ttyUSB0.device` and `WantedBy=dev-ttyUSB0.device`:
 - `IPAddressDeny=any` + `RestrictAddressFamilies=AF_UNIX` means it has
   literally zero network access.
 
+`install.sh` rewrites those two lines (and `After=`) for the configured
+`--device`. With two identical USB-serial adapters (e.g. two FTDI FT232R,
+`0403:6001`), pin the JeeLink by serial number so its name is stable:
+
+```udev
+# /etc/udev/rules.d/10-sensors.rules
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ATTRS{serial}=="<serial>", SYMLINK+="jeelink"
+```
+
+and install with `--device /dev/jeelink`: the unit is then bound to
+`dev-jeelink.device`.
+
 Verify: one `L ...` line per packet should start appearing at
 `/var/lib/housemon/logger/<year>/<date>.txt`:
 

@@ -217,6 +217,13 @@ fetch housemon-logger.service
 fetch housemon-sync.service
 fetch housemon-sync.timer
 
+# The logger unit ships bound to dev-ttyUSB0.device; point BindsTo/After/
+# WantedBy at the configured device (a udev symlink such as /dev/jeelink gets
+# its own dev-jeelink.device unit). The default /dev/ttyUSB0 changes nothing.
+devunit="$(systemd-escape --path --suffix=device "$SERIAL_DEVICE")"
+sed -i -E "s/^(BindsTo|After|WantedBy)=dev-[^ ]+\.device$/\1=${devunit}/" \
+    "${STAGE}/housemon-logger.service"
+
 # ---------------------------------------------------------------------------
 # apt prerequisites
 # ---------------------------------------------------------------------------
