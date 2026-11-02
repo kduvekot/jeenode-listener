@@ -27,10 +27,15 @@ ExecCondition=/bin/sh -c 'test -n "$${REMOTE}"'
 
 # `copy` (not `sync`) so the remote is an append-only mirror -- we never delete
 # remote objects just because the local copy rotated or was pruned.
+# --local-no-check-updated: the logger appends to the current file while
+# rclone uploads it; without this flag rclone fails with "sizes differ".
+# With it, rclone uploads the file as large as it was when first seen (an
+# exact prefix; the next tick uploads the rest).
 ExecStart=/usr/bin/rclone copy \
     --config /etc/housemon/rclone.conf \
     --log-level INFO \
     --stats 0 \
+    --local-no-check-updated \
     /var/lib/housemon/logger \
     ${REMOTE}
 
